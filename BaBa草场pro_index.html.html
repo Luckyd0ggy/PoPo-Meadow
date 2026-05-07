@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>极致解压：重力草场 ASMR</title>
+    <style>
+        :root { --grass: #A8C69F; }
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: var(--grass); touch-action: manipulation; }
+        
+        #game-canvas {
+            width: 100vw; height: 100vh;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Cg fill='%2396B88B' fill-opacity='0.4'%3E%3Cpath d='M20 60 Q 22 50 25 60 M25 60 Q 27 45 30 60 M60 30 Q 62 20 65 30 M65 30 Q 67 15 70 30' stroke='%2396B88B' stroke-width='1.5' fill='none'/%3E%3C/g%3E%3C/svg%3E");
+            background-size: 160px 160px;
+            position: relative;
+        }
+
+        .stamp {
+            position: absolute; text-align: center; pointer-events: none;
+            display: flex; flex-direction: column; align-items: center;
+            /* 增加物理滑行感 */
+            transition: left 0.8s cubic-bezier(0.1, 0.5, 0.2, 1), top 0.8s cubic-bezier(0.1, 0.5, 0.2, 1), opacity 0.6s;
+            z-index: 10;
+        }
+
+        .dog-icon { filter: drop-shadow(0 6px 4px rgba(0,0,0,0.1)); transition: transform 0.2s; }
+        .poop-icon { font-size: 24px; margin-top: -12px; }
+
+        #frenzy-ui {
+            position: fixed; top: 15%; width: 100%; text-align: center;
+            font-size: 80px; font-weight: 900; color: #FFF200; 
+            text-shadow: 0 0 20px #FF5E00; pointer-events: none; display: none; z-index: 100;
+            animation: frenzyFlash 0.4s infinite alternate;
+        }
+        @keyframes frenzyFlash { 0% { transform: scale(0.9); } 100% { transform: scale(1.1); } }
+
+        .animate-pop { animation: elastic 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        @keyframes elastic { 0% { transform: translate(-50%, -50%) scale(0); } 100% { transform: translate(-50%, -50%) scale(var(--s)); } }
+
+        /* FRENZY 喷射动画 */
+        .frenzy-spawn { animation: scatter 0.8s cubic-bezier(0.15, 0.85, 0.35, 1) forwards; }
+        @keyframes scatter {
+            0% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+            100% { transform: translate(var(--tx), var(--ty)) scale(var(--s)); opacity: 1; }
+        }
+
+        .controls { position: fixed; bottom: 30px; width: 100%; display: flex; justify-content: center; gap: 15px; z-index: 100; }
+        .btn { padding: 12px 25px; border: none; border-radius: 40px; background: #fff; font-weight: bold; box-shadow: 0 5px 20px rgba(0,0,0,0.1); cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div id="frenzy-ui">FRENZY!</div>
+    <div id="game-canvas"></div>
+    <div class="controls">
+        <button class="btn" id="gyro-btn">启用重力感应</button>
+        <button class="btn" id="reset-btn">净化草场</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('game-canvas');
+        const resetBtn = document.getElementById('reset-btn');
+        const gyroBtn = document.getElementById('gyro-btn');
+        const frenzyUI = document.getElementById('frenzy-ui');
+        
+        let count = 0;
+        let isFrenzy = false;
+        let audioCtx = null;
+        let gravity = { x: 0, y: 0 };
+
+        const dogs = ['🐕', '🐩', '🦮', '🐕‍🦺', '🐶', '🐺', '🦊'];
+        const stars = ['⭐', '✨', '🌟', '💫', '🌈', '💎', '🦄', '🍭', '🎀'];
+        const hotdogPrizes = ['🍅', '🟡', '💰', '💎', '❤️', '🔥', '🦴', '📱', '📟'];
+
+        function initAudio() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+        
+        // ASMR 风格音效：模拟湿润的点击声和低频弹响
+        function playAsmr(freq, type = 'sine') {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            const filter = audioCtx.createBiquadFilter();
+
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(freq / 2, audioCtx.currentTime + 0.1);
+
+            filter.type = 'lowpass';
+            filter.frequency.setValueAtTime(1000, audioCtx.currentTime);
+
+            gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+
+            osc.connect(filter);
+            filter.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+        }
+
+        // 陀螺仪逻辑
+        function handleOrientation(event) {
+            // gamma 是左右倾斜 (-90 到 90), beta 是前后倾斜 (-180 到 180)
+            gravity.x = event.gamma / 15; 
+            gravity.y = event.beta / 15;
+            updateGravityPositions();
+        }
+
+        function updateGravityPositions() {
+            const items = document.querySelectorAll('.stamp');
+            items.forEach(item => {
+                let curLeft = parseFloat(item.style.left);
+                let curTop = parseFloat(item.style.top);
+                
+                // 限制范围内移动
+                let nextLeft = Math.max(20, Math.min(window.innerWidth - 20, curLeft + gravity.x));
+                let nextTop = Math.max(20, Math.min(window.innerHeight - 20, curTop + gravity.y));
+                
+                item.style.left = nextLeft + 'px';
+                item.style.top = nextTop + 'px';
+            });
+        }
+
+        gyroBtn.addEventListener('click', () => {
+            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            window.addEventListener('deviceorientation', handleOrientation);
+                            gyroBtn.style.display = 'none';
+                        }
+                    });
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation);
+                gyroBtn.style.display = 'none';
+            }
+        });
+
+        function pushOthers(newX, newY) {
+            const items = document.querySelectorAll('.stamp');
+            items.forEach(item => {
+                const dx = parseFloat(item.style.left) - newX;
+                const dy = parseFloat(item.style.top) - newY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 100) {
+                    const angle = Math.atan2(dy, dx);
+                    const pushDist = 80 + Math.random() * 150;
+                    item.style.left = (newX + Math.cos(angle) * pushDist) + 'px';
+                    item.style.top = (newY + Math.sin(angle) * pushDist) + 'px';
+                }
+            });
+        }
+
+        function autoCleanup() {
+            const items = document.querySelectorAll('.stamp');
+            if (items.length > 200) { 
+                const oldBatch = Array.from(items).slice(0, 20);
+                oldBatch.forEach(el => {
+                    el.style.opacity = '0';
+                    el.style.transform = 'translate(-50%, -50%) scale(0)';
+                    setTimeout(() => el.remove(), 600);
+                });
+            }
+        }
+
+        function create(x, y, isScatter = false) {
+            initAudio();
+            if (!isScatter) {
+                pushOthers(x, y);
+                autoCleanup();
+            }
+
+            const stamp = document.createElement('div');
+            const randomScale = (Math.random() * 1.4 + 0.6).toFixed(2);
+            stamp.style.setProperty('--s', randomScale);
+            stamp.style.left = x + 'px';
+            stamp.style.top = y + 'px';
+
+            let dog, poop;
+            if (isScatter) {
+                stamp.className = 'stamp frenzy-spawn';
+                const angle = Math.random() * Math.PI * 2;
+                const dist = 180 + Math.random() * 400;
+                stamp.style.setProperty('--tx', Math.cos(angle) * dist + 'px');
+                stamp.style.setProperty('--ty', Math.sin(angle) * dist + 'px');
+                dog = Math.random() > 0.4 ? stars[Math.floor(Math.random() * stars.length)] : dogs[Math.floor(Math.random() * dogs.length)];
+                poop = stars[Math.floor(Math.random() * stars.length)];
+            } else {
+                stamp.className = 'stamp animate-pop';
+                if (Math.random() < 0.15) {
+                    dog = '🌭';
+                    poop = hotdogPrizes[Math.floor(Math.random() * hotdogPrizes.length)];
+                    if (poop === '📱' || poop === '📟') playAsmr(1200, 'triangle'); 
+                } else {
+                    dog = dogs[Math.floor(Math.random() * dogs.length)];
+                    poop = '💩';
+                }
+            }
+
+            const fontSize = isScatter ? (20 + Math.random() * 30) : (40 + Math.random() * 40);
+            stamp.innerHTML = `<div class="dog-icon" style="font-size: ${fontSize}px">${dog}</div><div class="poop-icon">${poop}</div>`;
+            canvas.appendChild(stamp);
+
+            if (!isScatter) {
+                count++;
+                playAsmr(200 + (count % 30) * 10);
+                if (navigator.vibrate) navigator.vibrate(10);
+                
+                if (count >= 100 && !isFrenzy) {
+                    isFrenzy = true;
+                    frenzyUI.style.display = 'block';
+                }
+
+                if (isFrenzy) {
+                    for (let i = 0; i < 20; i++) {
+                        setTimeout(() => create(x, y, true), i * 15);
+                    }
+                    playAsmr(600 + Math.random() * 400, 'triangle');
+                }
+            }
+        }
+
+        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); Array.from(e.touches).forEach(t => create(t.clientX, t.clientY)); });
+        canvas.addEventListener('mousedown', (e) => { if (!('ontouchstart' in window)) create(e.clientX, e.clientY); });
+        
+        resetBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            canvas.innerHTML = '';
+            count = 0;
+            isFrenzy = false;
+            frenzyUI.style.display = 'none';
+        });
+    </script>
+</body>
+</html>
